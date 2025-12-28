@@ -1,0 +1,24 @@
+services:
+  mlcc:
+    build: .
+    image: mlcc:latest
+    container_name: mlcc_dev
+    volumes:
+      # Mount the current directory to the catkin workspace src
+      - .:/root/catkin_ws/src/mlcc
+      # Persist build artifacts
+      - mlcc_build:/root/catkin_ws/build
+      - mlcc_devel:/root/catkin_ws/devel
+    environment:
+      - DISPLAY=${DISPLAY:-:0}
+      - ROS_HOSTNAME=localhost
+      - ROS_MASTER_URI=http://localhost:11311
+    network_mode: host
+    stdin_open: true
+    tty: true
+    working_dir: /root/catkin_ws
+    command: /bin/bash
+
+volumes:
+  mlcc_build:
+  mlcc_devel:

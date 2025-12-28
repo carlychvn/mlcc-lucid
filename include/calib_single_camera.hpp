@@ -34,7 +34,7 @@
 #include "BA/ba.hpp"
 #include "BA/tools.hpp"
 
-#define FISHEYE
+// Use pinhole model by default; enable FISHEYE only for fisheye lenses.
 
 class Camera
 {
@@ -98,11 +98,12 @@ public:
   int rgb_edge_minLen_ = 100;
 
   bool enable_ada_voxel = true;
+  bool apply_optical_frame_fix_ = false;
 
   Calibration(const std::string& CamCfgPaths, const std::string& CalibCfgFile, bool use_ada_voxel)
   {
-    loadCameraConfig(CamCfgPaths);
     loadCalibConfig(CalibCfgFile);
+    loadCameraConfig(CamCfgPaths);
     loadImgAndPointcloud();
 
     std::unordered_map<VOXEL_LOC, OCTO_TREE_ROOT*> surf_map;
@@ -143,7 +144,7 @@ public:
     //   cv::Mat::eye(3, 3, CV_64F), newCamMat, 0);
     // #endif
 
-    if(!camera_.rgb_img_.data)
+    if(camera_.rgb_img_.empty())
     {
       ROS_ERROR_STREAM("No image data!");
       exit(-1);
@@ -151,8 +152,24 @@ public:
     ROS_INFO_STREAM("Load all data!");
 
     cv::Mat gray_img, rgb_edge_img;
-    cv::cvtColor(camera_.rgb_img_, gray_img, cv::COLOR_BGR2GRAY);
-    edgeDetector(rgb_canny_threshold_, rgb_edge_minLen_, gray_img, rgb_edge_img, camera_.rgb_edge_cloud_);
+    try
+    {
+      cv::cvtColor(camera_.rgb_img_, gray_img, cv::COLOR_BGR2GRAY);
+    }
+    catch(const cv::Exception& e)
+    {
+      ROS_ERROR_STREAM("cvtColor failed: " << e.what());
+      exit(-1);
+    }
+    try
+    {
+      edgeDetector(rgb_canny_threshold_, rgb_edge_minLen_, gray_img, rgb_edge_img, camera_.rgb_edge_cloud_);
+    }
+    catch(const cv::Exception& e)
+    {
+      ROS_ERROR_STREAM("edgeDetector failed: " << e.what());
+      exit(-1);
+    }
     ROS_INFO_STREAM("Initialization complete");
   }
 
@@ -196,6 +213,17 @@ public:
     camera_.ext_t << camera_.init_ext_.at<double>(0, 3),
                      camera_.init_ext_.at<double>(1, 3),
                      camera_.init_ext_.at<double>(2, 3);
+    if(apply_optical_frame_fix_)
+    {
+      // Convert from body frame (x forward, y left, z up) to optical frame (x right, y down, z forward).
+      Eigen::Matrix3d R_cb;
+      R_cb << 0, -1, 0,
+              0, 0, -1,
+              1, 0, 0;
+      camera_.ext_R = R_cb * camera_.ext_R;
+      camera_.ext_t = R_cb * camera_.ext_t;
+      ROS_INFO_STREAM("Applied optical frame fix to camera extrinsic.");
+    }
     std::cout << "Camera Matrix: " << std::endl << camera_.camera_matrix_ << std::endl;
     std::cout << "Distortion Coeffs: " << std::endl << camera_.dist_coeffs_ << std::endl;
     std::cout << "Extrinsic Params: " << std::endl << camera_.init_ext_ << std::endl;
@@ -214,6 +242,9 @@ public:
     fSettings["ImageNumber"] >> image_number_;
     fSettings["DataPath"] >> data_path_;
     fSettings["CameraFoV"] >> cam_fov_;
+    cv::FileNode optical_fix = fSettings["ApplyOpticalFrameFix"];
+    if(!optical_fix.empty())
+      optical_fix >> apply_optical_frame_fix_;
 
     rgb_canny_threshold_ = fSettings["Canny.gray_threshold"];
     rgb_edge_minLen_ = fSettings["Canny.len_threshold"];
@@ -237,7 +268,10 @@ public:
     lidar_cloud_ = pcl::PointCloud<pcl::PointXYZI>::Ptr(new pcl::PointCloud<pcl::PointXYZI>);
     pcl::io::loadPCDFile(data_path_ + std::to_string(lidar_number_) + ".pcd", *lidar_cloud_);
     ROS_INFO_STREAM("Sucessfully load Point Cloud");
-    camera_.rgb_img_ = cv::imread(data_path_ + std::to_string(image_number_) + ".png", cv::IMREAD_COLOR);
+    const std::string img_path = data_path_ + std::to_string(image_number_) + ".png";
+    camera_.rgb_img_ = cv::imread(img_path, cv::IMREAD_COLOR);
+    if(camera_.rgb_img_.empty())
+      ROS_ERROR_STREAM("Failed to load image: " << img_path);
     ROS_INFO_STREAM("Sucessfully load Image");
   }
 
@@ -822,6 +856,13 @@ public:
                     const cv::Mat& src_img, cv::Mat& edge_img,
                     pcl::PointCloud<pcl::PointXYZ>::Ptr& edge_clouds)
   {
+    if(src_img.empty())
+    {
+      ROS_ERROR_STREAM("edgeDetector received an empty image.");
+      edge_img = cv::Mat();
+      edge_clouds = pcl::PointCloud<pcl::PointXYZ>::Ptr(new pcl::PointCloud<pcl::PointXYZ>);
+      return;
+    }
     int gaussian_size = 5;
     edge_clouds = pcl::PointCloud<pcl::PointXYZ>::Ptr(new pcl::PointCloud<pcl::PointXYZ>);
     cv::GaussianBlur(src_img, src_img, cv::Size(gaussian_size, gaussian_size), 0, 0);
@@ -941,8 +982,9 @@ public:
     {
       cv::Mat residual_img = getConnectImg(cam, dis_threshold, cam_edge_clouds_2d, line_edge_cloud_2d);
       cv::resize(residual_img, residual_img, cv::Size(), 0.5, 0.5, cv::INTER_LINEAR);
-      cv::imshow("residual", residual_img);
-      cv::waitKey(10);
+      // Disabled for headless Docker operation
+      // cv::imshow("residual", residual_img);
+      // cv::waitKey(10);
     }
 
     pcl::search::KdTree<pcl::PointXYZ>::Ptr kdtree_cam(new pcl::search::KdTree<pcl::PointXYZ>());
@@ -1255,7 +1297,8 @@ public:
         float depth = sqrt(pow(pts_3d[i].x, 2) + pow(pts_3d[i].y, 2) + pow(pts_3d[i].z, 2));
         if(depth >= 40) depth = 40;
         float grey = depth / 40 * 65535;
-        image_project.at<ushort>(point_2d.y, point_2d.x) = grey;
+        // Draw larger circles for better visibility (radius 3 pixels)
+        cv::circle(image_project, point_2d, 3, cv::Scalar(grey), -1);
       }
     }
     cv::Mat grey_image_projection;
@@ -1298,6 +1341,13 @@ public:
     lidar_cloud->points.resize(cnt);
     // downsample_voxel(*lidar_cloud, 0.03);
     projection(extrinsic_params, cam, lidar_cloud, depth_projection_img);
+    if(depth_projection_img.empty())
+    {
+      ROS_ERROR_STREAM("Projection produced an empty image; returning camera image.");
+      if(cam.rgb_img_.empty())
+        return cv::Mat();
+      return cam.rgb_img_.clone();
+    }
     cv::Mat map_img = cv::Mat::zeros(cam.height_, cam.width_, CV_8UC3);
     for(int x = 0; x < map_img.cols; x++)
     {
@@ -1311,8 +1361,22 @@ public:
         map_img.at<cv::Vec3b>(y, x)[2] = r;
       }
     }
-    cv::Mat merge_img = 0.8 * map_img + 0.8 * cam.rgb_img_;
-    return merge_img;
+    // Increase LiDAR weight and decrease image weight for better visibility
+    if(cam.rgb_img_.empty())
+    {
+      ROS_ERROR_STREAM("Cannot merge projection with empty image; returning projection only.");
+      return map_img;
+    }
+    try
+    {
+      cv::Mat merge_img = 1.5 * map_img + 0.5 * cam.rgb_img_;
+      return merge_img;
+    }
+    catch(const cv::Exception& e)
+    {
+      ROS_ERROR_STREAM("Failed to merge projection and image: " << e.what());
+      return map_img;
+    }
   }
 };
 

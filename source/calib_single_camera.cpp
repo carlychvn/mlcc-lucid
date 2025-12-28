@@ -3,6 +3,8 @@
 #include <iostream>
 
 #include "calib_single_camera.hpp"
+
+#include <algorithm>
 #include "ceres/ceres.h"
 #include "common.h"
 
@@ -242,8 +244,15 @@ void roughCalib(Calibration& calibra, double search_resolution, int max_iter)
                             calibra.lidar_edge_cloud_, pnp_list);
           cv::Mat projection_img = calibra.getProjectionImg(test_params);
           cv::resize(projection_img, projection_img, cv::Size(), 0.5, 0.5, cv::INTER_LINEAR);
-          cv::imshow("rough calib", projection_img);
-          cv::waitKey(10);
+
+          // Save projection image during rough calibration
+          std::string img_filename = "./result/rough_calib_projection.png";
+          cv::imwrite(img_filename, projection_img);
+          ROS_INFO_STREAM("Saved rough calibration projection to: " << img_filename);
+
+          // Disabled for headless Docker operation
+          // cv::imshow("rough calib", projection_img);
+          // cv::waitKey(10);
         }
       }
     }
@@ -369,15 +378,11 @@ int main(int argc, char **argv)
                   transation(0), transation(1), transation(2);
   calib.colorCloud(calib_params, 1, calib.camera_, calib.camera_.rgb_img_, calib.lidar_cloud_);
 
-  while(ros::ok())
-  {
-    cout << "please reset rviz and push enter to publish again" << endl;
-    getchar();
-    Eigen::Vector3d euler_angle = calib.camera_.ext_R.eulerAngles(2, 1, 0);
-    Eigen::Vector3d transation = calib.camera_.ext_t;
-    Vector6d calib_params;
-    calib_params << euler_angle(0), euler_angle(1), euler_angle(2), transation(0), transation(1), transation(2);
-    calib.colorCloud(calib_params, 1, calib.camera_, calib.camera_.rgb_img_, calib.lidar_cloud_);
-  }
+  // Save final projection image after calibration
+  cv::Mat final_projection_img = calib.getProjectionImg(calib_params);
+  std::string final_img_filename = ResultPath + "/final_projection.png";
+  cv::imwrite(final_img_filename, final_projection_img);
+  ROS_INFO_STREAM("Saved final calibration projection to: " << final_img_filename);
+
   return 0;
 }

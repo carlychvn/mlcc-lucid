@@ -175,10 +175,17 @@ void roughCalib(Calibration &calibra, double search_resolution, int max_iter)
             calibra.buildVPnp(calibra.cams[a], test_params, match_dis,
                               true, calibra.cams[a].rgb_edge_clouds,
                               calibra.lidar_edge_clouds, pnp_list);
-            // cv::Mat projection_img = calibra.getProjectionImg(test_params, a, 0);
-            // std::string img_name = std::to_string(a) + "_projection";
-            // cv::imshow(img_name, projection_img);
-            // cv::waitKey(10);
+
+            // Generate and save projection image for rough calibration
+            cv::Mat projection_img = calibra.getProjectionImg(test_params, a, 0);
+            std::string img_name = std::to_string(a) + "_projection";
+            cv::imshow(img_name, projection_img);
+            cv::waitKey(10);
+
+            // Save rough calibration projection for each camera
+            std::string img_filename = "./result/rough_calib_camera" + std::to_string(a) + "_projection.png";
+            cv::imwrite(img_filename, projection_img);
+            ROS_INFO_STREAM("Saved rough calibration projection for camera " << a << " to: " << img_filename);
           }
         }
       }
@@ -292,6 +299,12 @@ int main(int argc, char **argv)
       outfile << R(i, 0) << "," << R(i, 1) << "," << R(i, 2) << "," << T[i] << "\n";
     outfile << 0 << "," << 0 << "," << 0 << "," << 1 << "\n";
     outfile.close();
+
+    // Save final projection image for each camera
+    cv::Mat final_projection_img = calib.getProjectionImg(calib_params, a, 0);
+    std::string final_img_filename = ResultPath + "/final_camera" + std::to_string(a) + "_projection.png";
+    cv::imwrite(final_img_filename, final_projection_img);
+    ROS_INFO_STREAM("Saved final calibration projection for camera " << a << " to: " << final_img_filename);
   }
 
   /* ground truth calculated from the chessboard method */

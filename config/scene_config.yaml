@@ -1,13 +1,14 @@
 %YAML:1.0
 
-LiDARNumber: 2
-ImageNumber: 2
-DataPath: "/home/sam/Desktop/test/"
-CameraFoV: 100
+LiDARNumber: 1
+ImageNumber: 1
+DataPath: "/root/catkin_ws/src/mlcc/my_data/"
+CameraFoV: 80
+ApplyOpticalFrameFix: 0
 
 # Params for Canny Edge Extraction
-Canny.gray_threshold: 10
-Canny.len_threshold: 200
+Canny.gray_threshold: 5
+Canny.len_threshold: 100
 
 # Params for Voxel Cutting & Plane Fitting & Edge Extraction
 Voxel.size: 1
